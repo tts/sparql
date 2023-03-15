@@ -11,8 +11,8 @@ sparql_endpoint <- "https://ldf.fi/semparl/sparql"
 # } 
 # LIMIT 10"
 
-# Works when copied with cURL from the UI and run from command prompt,
-# but from here, this throws an HTTP 400 error. Perhaps the URL gets too long?
+# Escaping needs 4 backslashes
+# https://github.com/eclipse/rdf4j/issues/1105#issuecomment-652204116
 q <- '
   PREFIX dct: <http://purl.org/dc/terms/>
   PREFIX semparls: <http://ldf.fi/schema/semparl/>
@@ -38,21 +38,21 @@ q <- '
 
   ?id skos:prefLabel ?prefLabel__id . 
   BIND(?prefLabel__id as ?prefLabel__prefLabel)
-  BIND(CONCAT("/speeches/page/", REPLACE(STR(?id), "^.*\\/(.+)", "$1")) AS ?prefLabel__dataProviderUrl)
+  BIND(CONCAT("/speeches/page/", REPLACE(STR(?id), "^.*\\\\/(.+)", "$1")) AS ?prefLabel__dataProviderUrl)
   BIND(?id as ?uri__id)
   BIND(?id as ?uri__dataProviderUrl)
   BIND(?id as ?uri__prefLabel)
   {
     ?id semparls:speaker ?speaker__id .
     ?speaker__id skos:prefLabel ?speaker__prefLabel .
-    BIND(CONCAT("/people/page/", REPLACE(STR(?speaker__id), "^.*\\/(.+)", "$1")) AS ?speaker__dataProviderUrl)
+    BIND(CONCAT("/people/page/", REPLACE(STR(?speaker__id), "^.*\\\\/(.+)", "$1")) AS ?speaker__dataProviderUrl)
   }
   UNION
   {
     ?id semparls:party ?party__id .
     ?party__id skos:prefLabel ?party__prefLabel .
     FILTER(LANG(?party__prefLabel) = "fi")
-    BIND(CONCAT("/groups/page/", REPLACE(STR(?party__id), "^.*\\/(.+)", "$1")) AS ?party__dataProviderUrl)
+    #BIND(CONCAT("/groups/page/", REPLACE(STR(?party__id), "^.*\\/(.+)", "$1")) AS ?party__dataProviderUrl)
   }
   UNION 
   {
@@ -77,7 +77,7 @@ q <- '
   {
     ?id semparls:item ?item__id .
     ?item__id skos:prefLabel ?item__prefLabel .
-    BIND(CONCAT("/items/page/", REPLACE(STR(?item__id), "^.*\\/(.+)", "$1")) AS ?item__dataProviderUrl) .
+    BIND(CONCAT("/items/page/", REPLACE(STR(?item__id), "^.*\\\\/(.+)", "$1")) AS ?item__dataProviderUrl) .
   }
   UNION
   {
@@ -111,4 +111,6 @@ result <- process_json(sparql(q))
 result_df <- do.call(data.frame, result) %>% 
   select(ends_with("value"))
 
+# Debug
+sparql(q)
 
