@@ -27,12 +27,17 @@ ui <- function(request) {
     width = 300,
     sidebarMenu(
       textInput(inputId = "search",
-                label = "Search"),
-      actionButton("do", "Click Me")
+                label = "Search",
+                placeholder = "e.g. olkiluo*"),
+      actionButton("do", "Search")
     ))
   
   
   body <- dashboardBody(
+    # doesn't work, tooltip config is browser dependent
+    tags$head(
+      tags$style(HTML('#hit { font-weight: bold }'))
+    ),
     fluidRow(
       column(width = 12,
              height = "300px",
@@ -55,7 +60,11 @@ server <- function(input, output, session) {
  # Escaping in the query needs 4 backslashes
  # https://github.com/eclipse/rdf4j/issues/1105#issuecomment-652204116
   
-  observeEvent(
+  string <- reactive(
+    gsub("\\*", "", input$search)
+  )
+  
+  result <- eventReactive(
     input$do, {
       q <- paste0('
   PREFIX dct: <http://purl.org/dc/terms/>
@@ -73,15 +82,15 @@ server <- function(input, output, session) {
         ?id a ?facetClass .
         OPTIONAL { ?id dct:date ?orderBy }
       }
-      ORDER BY (!BOUND(?orderBy)) asc(?orderBy)
-      LIMIT 50 OFFSET 0
+      ORDER BY (!BOUND(?orderBy)) desc(?orderBy) # ttso: changed asc->desc
+      LIMIT 10 OFFSET 0 # ttso: changed to 10
     }
     FILTER(BOUND(?id))
     # score and literal are used only for Jena full text index, but may slow down the query performance
     ( ?id ?score ?literal ) text:query ( semparls:content ','"',input$search,'"',' 10000000 "highlight:s:<b> | e:</b> | z:150" ) .
 
 
-  ?id skos:prefLabel ?prefLabel__id . 
+  ?id skos:prefLabel ?prefLabel__id .
   BIND(?prefLabel__id as ?prefLabel__prefLabel)
   BIND(CONCAT("/speeches/page/", REPLACE(STR(?id), "^.*\\\\/(.+)", "$1")) AS ?prefLabel__dataProviderUrl)
   BIND(?id as ?uri__id)
@@ -99,7 +108,7 @@ server <- function(input, output, session) {
     FILTER(LANG(?party__prefLabel) = "fi")
     BIND(CONCAT("/groups/page/", REPLACE(STR(?party__id), "^.*\\\\/(.+)", "$1")) AS ?party__dataProviderUrl)
   }
-  UNION 
+  UNION
   {
     ?id semparls:speechType ?speechType__id .
     ?speechType__id skos:prefLabel ?speechType__prefLabel .
@@ -112,13 +121,13 @@ server <- function(input, output, session) {
   UNION
   {
     ?id dct:date ?date_ .
-    BIND(CONCAT(STR(DAY(?date_)), 
-                     ".", 
-                     STR(MONTH(?date_)), 
-                     ".", 
+    BIND(CONCAT(STR(DAY(?date_)),
+                     ".",
+                     STR(MONTH(?date_)),
+                     ".",
                     STR(YEAR(?date_))) as ?date)
   }
-  UNION 
+  UNION
   {
     ?id semparls:item ?item__id .
     ?item__id skos:prefLabel ?item__prefLabel .
@@ -131,6 +140,9 @@ server <- function(input, output, session) {
 
   }')
       res <- process_json(sparql(q))
+      
+      validate(need(length(res)>0, message = "No hits!"))
+      
       res_df <- do.call(data.frame, res) %>% 
         select(id.value, prefLabel__id.value, speaker__id.value, 
                party__prefLabel.value, speechType__prefLabel.value,
@@ -142,6 +154,7 @@ server <- function(input, output, session) {
         fill(speechType__prefLabel.value, .direction = "downup") %>% 
         fill(date_.value, .direction = "downup") %>% 
         fill(content.value, .direction = "downup") %>% 
+        ungroup() %>% 
         rename(id = id.value,
                label = prefLabel__id.value,
                speaker = speaker__id.value,
@@ -149,24 +162,25 @@ server <- function(input, output, session) {
                speechType = speechType__prefLabel.value,
                date = date_.value,
                content = content.value) %>% 
-        ungroup()
+        mutate(id = paste0('<a href="',id,'" target="_blank">', id, '</a>'),
+               speaker = paste0('<a href="', speaker,'" target="_blank">', speaker, '</a>'),
+               content = gsub(string(), paste0("<span id='hit'>",string(),"</span>"), content, ignore.case = TRUE))
       
       df_distinct <- distinct(df_cleaned, id, .keep_all = TRUE)
+    })
       
       output$table <- renderDT(
-        datatable(df_distinct, options = list(columnDefs = list(list(
-          targets = 7,
-          render = JS(
+        datatable(result(), 
+                  escape = c(TRUE, FALSE, TRUE, FALSE, FALSE, FALSE, TRUE), 
+                  options = list(columnDefs = list(list(
+                    targets = 7,
+                    render = JS(
             "function(data, type, row, meta) {",
-            "return type === 'display' && data.length > 20 ?",
-            "'<span title=\"' + data + '\">' + data.substr(0, 20) + '...</span>' : data;",
+            "return type === 'display' && data.length > 50 ?",
+            "'<span title=\"' + data + '\">' + data.substr(0, 50) + '...</span>' : data;",
             "}")
-        ))))
+      ))))
       )
-    
-    }
-  )
-  
 }
 
 
