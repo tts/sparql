@@ -2,6 +2,7 @@ library(shiny)
 library(shinydashboard)
 library(DT)
 library(tidyverse)
+library(shinycssloaders)
 
 sparql_endpoint <- "https://ldf.fi/semparl/sparql"
 ua <- httr::user_agent("https://github.com/tts/sparql")
@@ -21,32 +22,35 @@ process_json <- function(res) {
   res <- jsonlite::parse_json(res, simplifyVector = TRUE)$results$bindings
 }
 
+options(spinner.type  = 7,
+        spinner.size  = 0.5,
+        spinner.color = "#ff6502")
+
 ui <- function(request) {
   
   sidebar <- dashboardSidebar(
     width = 300,
     sidebarMenu(
       textInput(inputId = "search",
-                label = "Search",
-                placeholder = "e.g. olkiluo*"),
-      actionButton("do", "Search")
+                label = "Hakusana (katkaisumerkki = *)",
+                placeholder = "esim. olkiluo*"),
+      actionButton("do", "Hae!")
     ))
   
   
   body <- dashboardBody(
-    # doesn't work, tooltip config is browser dependent
-    tags$head(
-      tags$style(HTML('#hit { font-weight: bold }'))
-    ),
     fluidRow(
       column(width = 12,
              height = "300px",
-             DTOutput("table"))
+             shinycssloaders::withSpinner(
+               DTOutput("table")
+               )
+             )
     )
   )
   
   dashboardPage(
-    dashboardHeader(title = "Search Parlamenttisampo", titleWidth = "800"),
+    dashboardHeader(title = "Parlamenttisampo-haku", titleWidth = "800"),
     sidebar,
     body,
     skin = "black"
@@ -59,10 +63,6 @@ server <- function(input, output, session) {
   
  # Escaping in the query needs 4 backslashes
  # https://github.com/eclipse/rdf4j/issues/1105#issuecomment-652204116
-  
-  string <- reactive(
-    gsub("\\*", "", input$search)
-  )
   
   result <- eventReactive(
     input$do, {
@@ -141,7 +141,7 @@ server <- function(input, output, session) {
   }')
       res <- process_json(sparql(q))
       
-      validate(need(length(res)>0, message = "No hits!"))
+      validate(need(length(res)>0, message = "Ei löytynyt mitään!"))
       
       res_df <- do.call(data.frame, res) %>% 
         select(id.value, prefLabel__id.value, speaker__id.value, 
@@ -156,28 +156,29 @@ server <- function(input, output, session) {
         fill(content.value, .direction = "downup") %>% 
         ungroup() %>% 
         rename(id = id.value,
-               label = prefLabel__id.value,
-               speaker = speaker__id.value,
-               party = party__prefLabel.value,
-               speechType = speechType__prefLabel.value,
-               date = date_.value,
-               content = content.value) %>% 
-        mutate(id = paste0('<a href="',id,'" target="_blank">', id, '</a>'),
-               speaker = paste0('<a href="', speaker,'" target="_blank">', speaker, '</a>'),
-               content = gsub(string(), paste0("<span id='hit'>",string(),"</span>"), content, ignore.case = TRUE))
+               tapahtuma = prefLabel__id.value,
+               puhuja = speaker__id.value,
+               puolue = party__prefLabel.value,
+               puhetyyppi = speechType__prefLabel.value,
+               päiväys = date_.value,
+               puhe = content.value) %>% 
+        mutate( id = sub("http://ldf.fi/semparl/speeches/", "https://parlamenttisampo.fi/speeches/page/", id),
+                puhuja = sub("http://ldf.fi/semparl/people/", "https://parlamenttisampo.fi/people/page/", puhuja),
+                id = paste0('<a href="',id,'" target="_blank">', id, '</a>'),
+                puhuja = paste0('<a href="', puhuja,'" target="_blank">', puhuja, '</a>'))
       
       df_distinct <- distinct(df_cleaned, id, .keep_all = TRUE)
     })
       
       output$table <- renderDT(
         datatable(result(), 
-                  escape = c(TRUE, FALSE, TRUE, FALSE, FALSE, FALSE, TRUE), 
+                  escape = c(TRUE, FALSE, TRUE, FALSE, FALSE, FALSE, FALSE), 
                   options = list(columnDefs = list(list(
                     targets = 7,
                     render = JS(
             "function(data, type, row, meta) {",
-            "return type === 'display' && data.length > 50 ?",
-            "'<span title=\"' + data + '\">' + data.substr(0, 50) + '...</span>' : data;",
+            "return type === 'display' && data.length > 100 ?",
+            "'<span title=\"' + data + '\">' + data.substr(0, 100) + '...</span>' : data;",
             "}")
       ))))
       )
