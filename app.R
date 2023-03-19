@@ -1,8 +1,10 @@
 library(shiny)
 library(shinydashboard)
 library(DT)
-library(tidyverse)
+library(tidyr)
+library(dplyr)
 library(shinycssloaders)
+library(openai)
 
 sparql_endpoint <- "https://ldf.fi/semparl/sparql"
 ua <- httr::user_agent("https://github.com/tts/sparql")
@@ -29,23 +31,31 @@ options(spinner.type  = 7,
 ui <- function(request) {
   
   sidebar <- dashboardSidebar(
-    width = 300,
+    width = 200,
     sidebarMenu(
       textInput(inputId = "search",
-                label = "Hakusana (katkaisumerkki = *)",
+                label = "Hakusana, katkaisu=*",
                 placeholder = "esim. olkiluo*"),
-      actionButton("do", "Hae!")
+      actionButton("do", "Hae")
     ))
-  
   
   body <- dashboardBody(
     fluidRow(
       column(width = 12,
-             height = "300px",
+             height = "600px",
              shinycssloaders::withSpinner(
                DTOutput("table")
-               )
              )
+      )
+    ),
+    fluidRow(
+      column(width = 3,
+             uiOutput("dopic")),
+      column(width = 9,
+             shinycssloaders::withSpinner(
+               uiOutput("pic")
+             )
+      )
     )
   )
   
@@ -58,11 +68,10 @@ ui <- function(request) {
   
 }
 
-
 server <- function(input, output, session) {
   
- # Escaping in the query needs 4 backslashes
- # https://github.com/eclipse/rdf4j/issues/1105#issuecomment-652204116
+  # Escaping in the query needs 4 backslashes
+  # https://github.com/eclipse/rdf4j/issues/1105#issuecomment-652204116
   
   result <- eventReactive(
     input$do, {
@@ -82,8 +91,8 @@ server <- function(input, output, session) {
         ?id a ?facetClass .
         OPTIONAL { ?id dct:date ?orderBy }
       }
-      ORDER BY (!BOUND(?orderBy)) desc(?orderBy) # ttso: changed asc->desc
-      LIMIT 10 OFFSET 0 # ttso: changed to 10
+      ORDER BY (!BOUND(?orderBy)) desc(?orderBy) # ttso: changed to desc
+      LIMIT 5 OFFSET 0 # ttso: changed to 5
     }
     FILTER(BOUND(?id))
     # score and literal are used only for Jena full text index, but may slow down the query performance
@@ -144,44 +153,55 @@ server <- function(input, output, session) {
       validate(need(length(res)>0, message = "Ei löytynyt mitään!"))
       
       res_df <- do.call(data.frame, res) %>% 
-        select(id.value, prefLabel__id.value, speaker__id.value, 
-               party__prefLabel.value, speechType__prefLabel.value,
-               date_.value, content.value)
+        select(id.value, content.value)
+      
       df_cleaned <- res_df %>% 
-        group_by(id.value, prefLabel__id.value, .drop = FALSE) %>% 
-        fill(speaker__id.value, .direction = "down") %>% 
-        fill(party__prefLabel.value, .direction = "downup") %>% 
-        fill(speechType__prefLabel.value, .direction = "downup") %>% 
-        fill(date_.value, .direction = "downup") %>% 
+        group_by(id.value, .drop = FALSE) %>% 
         fill(content.value, .direction = "downup") %>% 
         ungroup() %>% 
         rename(id = id.value,
-               tapahtuma = prefLabel__id.value,
-               puhuja = speaker__id.value,
-               puolue = party__prefLabel.value,
-               puhetyyppi = speechType__prefLabel.value,
-               päiväys = date_.value,
                puhe = content.value) %>% 
-        mutate( id = sub("http://ldf.fi/semparl/speeches/", "https://parlamenttisampo.fi/speeches/page/", id),
-                puhuja = sub("http://ldf.fi/semparl/people/", "https://parlamenttisampo.fi/people/page/", puhuja),
-                id = paste0('<a href="',id,'" target="_blank">', id, '</a>'),
-                puhuja = paste0('<a href="', puhuja,'" target="_blank">', puhuja, '</a>'))
+        mutate(id = sub("http://ldf.fi/semparl/speeches/", "https://parlamenttisampo.fi/speeches/page/", id),
+               id = paste0('<a href="',id,'" target="_blank">', id, '</a>'))
       
       df_distinct <- distinct(df_cleaned, id, .keep_all = TRUE)
     })
-      
-      output$table <- renderDT(
-        datatable(result(), 
-                  escape = c(TRUE, FALSE, TRUE, FALSE, FALSE, FALSE, FALSE), 
-                  options = list(columnDefs = list(list(
-                    targets = 7,
-                    render = JS(
-            "function(data, type, row, meta) {",
-            "return type === 'display' && data.length > 100 ?",
-            "'<span title=\"' + data + '\">' + data.substr(0, 100) + '...</span>' : data;",
-            "}")
-      ))))
+  
+  output$table <- renderDT(
+    datatable(result(), 
+              escape = c(TRUE, FALSE),
+              selection = "single")
+  )
+  
+  prompt <- eventReactive(
+    input$table_rows_selected, {
+      r <- input$table_rows_selected
+      if (length(r)) { t <- toString(result()[r, "puhe"]) }
+      t_clean <- gsub("^[^!]*! ", "", t)
+      t_clean2 <- gsub("\\[.*?\\]", "", t_clean)
+      t1000 <- substr(t_clean2, 1, 1000)
+    })
+  
+  observeEvent(input$table_rows_selected, {
+    output$dopic <- renderUI({
+      actionButton("dopic", label = "Tee kuva", icon = icon("image"))
+    })
+  })
+  
+  picresult <- eventReactive(
+    input$dopic, {
+      res <- create_image(
+        prompt = prompt(),
+        size = "512x512"
       )
+      tags$img(src = res$data$url) 
+    }
+  )
+  
+  output$pic <- renderUI({
+    picresult()
+  })
+  
 }
 
 
